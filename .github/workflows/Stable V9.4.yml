@@ -1361,7 +1361,64 @@ jobs:
 
           echo ""
           echo "🎉 ENABLE_RUST (Final): $RUST_ENABLED"
-          
+
+      # ==============================
+      # Apply Custom config.gz
+      # ==============================
+      - name: 🔧 Apply Custom config.gz
+        if: ${{ github.event.inputs.CONFIGGZ != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "------------------------------"
+          echo "🚀 Applying Custom config.gz..."
+          echo "------------------------------"
+          echo ""
+
+          CONFIGGZ_URL="${{ github.event.inputs.CONFIGGZ }}"
+          KERNEL_DIR="${GITHUB_WORKSPACE}/kernel_workspace/kernel_platform/common"
+          OUT_DIR="${KERNEL_DIR}/out"
+          DEFCONFIG="${KERNEL_DIR}/arch/arm64/configs/gki_defconfig"
+
+          if [[ ! -d "$KERNEL_DIR" ]]; then
+            echo "⚠️ Kernel Common Directory Not Found: $KERNEL_DIR"
+            exit 1
+          fi
+
+          mkdir -p "$OUT_DIR"
+
+          echo "📥 Downloading config.gz from: $CONFIGGZ_URL"
+          curl -fsSL --retry 3 --retry-delay 5 \
+            -o "${OUT_DIR}/config.gz" \
+            "$CONFIGGZ_URL" || {
+              echo "⚠️ Failed to Download config.gz"
+              exit 1
+            }
+
+          # Validate the downloaded file is actually gzip
+          if ! file "${OUT_DIR}/config.gz" | grep -qi "gzip"; then
+            echo "⚠️ Downloaded file does not appear to be a valid gzip file"
+            file "${OUT_DIR}/config.gz"
+            exit 1
+          fi
+
+          echo "📦 Extracting config.gz to out/.config..."
+          zcat "${OUT_DIR}/config.gz" > "${OUT_DIR}/.config"
+
+          echo "✔ Config extracted successfully"
+          echo "📊 Config line count: $(wc -l < "${OUT_DIR}/.config")"
+
+          # Also overwrite gki_defconfig so that the Kernel Configuration
+          # step (which appends to it) works correctly for both paths
+          cp "${OUT_DIR}/.config" "$DEFCONFIG"
+
+          # Signal downstream steps that a custom config is in use
+          echo "CUSTOM_CONFIG=true" >> "$GITHUB_ENV"
+          echo "CUSTOM_CONFIG_PATH=${OUT_DIR}/.config" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "🎉 Custom config.gz Applied Successfully"
       # ==============================
       # Inject Custom Kernel Version Suffix
       # ==============================
@@ -4232,13 +4289,20 @@ jobs:
           [[ "${ENABLE_RUST:-false}" == "true" ]] && MAKE_ARGS=(RUSTC=../../prebuilts/rust/linux-x86/$RUSTC_VERSION/bin/rustc "${MAKE_ARGS[@]}")
           
           # Kernel Configuration and Compilation
-          echo ">> 🚀 Running GKI Default Configuration"
-          if ! make O=out ARCH=arm64 "${MAKE_ARGS[@]}" gki_defconfig; then
-            echo "⚠️ GKI Default Configuration Failed"
-            echo "fallback_reason=gki_defconfig_failed" >> "$GITHUB_OUTPUT"
-            echo "fallback=true" >> "$GITHUB_OUTPUT"
-            export FALLBACK_SET=1
-            exit 1
+          # Kernel Configuration and Compilation
+          if [[ "${CUSTOM_CONFIG:-false}" == "true" && -f "${CUSTOM_CONFIG_PATH:-}" ]]; then
+            echo ">> 🚀 Using Custom config.gz Configuration"
+            mkdir -p out
+            cp "$CUSTOM_CONFIG_PATH" out/.config
+          else
+            echo ">> 🚀 Running GKI Default Configuration"
+            if ! make O=out ARCH=arm64 "${MAKE_ARGS[@]}" gki_defconfig; then
+              echo "⚠️ GKI Default Configuration Failed"
+              echo "fallback_reason=gki_defconfig_failed" >> "$GITHUB_OUTPUT"
+              echo "fallback=true" >> "$GITHUB_OUTPUT"
+              export FALLBACK_SET=1
+              exit 1
+            fi
           fi
           
           # Link Time Optimization (LTO) Configuration
