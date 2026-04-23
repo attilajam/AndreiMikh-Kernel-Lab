@@ -237,6 +237,12 @@ on:
           - Performance
           - Balance
           - Disable 
+          
+      CONFIGGZ:
+        type: string
+        description: "URL to a config.gz file (leave empty to use default gki_defconfig)"
+        required: false
+        default: ""
 
 jobs:
   build:
